@@ -1,0 +1,50 @@
+# Dependencies
+node_modules/
+backend/venv/
+backend/env/
+backend/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Build
+dist/
+build/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Environment
+.env
+.env.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Temporary files
+backend/storage/uploads/*.pdf
+backend/storage/results/*.xlsx
+*.tmp
+temp/
+
+# Python
+*.py[cod]
+*$py.class
+.Python
+
+# Testing
+coverage/
+.nyc_output/
+.pytest_cache/
