@@ -30,12 +30,16 @@ export default function UploadSection({ onFileSelect, onProcess, selectedFile, i
     return true;
   };
 
+  const isMulti = Array.isArray(selectedFile);
+  const selectedFiles = isMulti ? selectedFile : (selectedFile ? [selectedFile] : []);
+
   // Handler para seleção de arquivo
   const handleFileChange = (e) => {
-    const file = e.target.files?.[0];
-    if (file && validateFile(file)) {
-      onFileSelect(file);
-    }
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    const valid = files.filter(validateFile);
+    if (!valid.length) return;
+    onFileSelect(valid);
   };
 
   // Handlers para drag and drop
@@ -53,10 +57,10 @@ export default function UploadSection({ onFileSelect, onProcess, selectedFile, i
     e.preventDefault();
     setIsDragging(false);
     
-    const file = e.dataTransfer.files?.[0];
-    if (file && validateFile(file)) {
-      onFileSelect(file);
-    }
+    const files = Array.from(e.dataTransfer.files || []);
+    const valid = files.filter(validateFile);
+    if (!valid.length) return;
+    onFileSelect(valid);
   };
 
   // Remove arquivo selecionado
@@ -64,6 +68,15 @@ export default function UploadSection({ onFileSelect, onProcess, selectedFile, i
     onFileSelect(null);
     setError('');
     if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const handleRemoveOne = (idx) => {
+    const next = selectedFiles.filter((_, i) => i !== idx);
+    onFileSelect(next.length ? next : null);
+    setError('');
+    if (fileInputRef.current && next.length === 0) {
       fileInputRef.current.value = '';
     }
   };
@@ -94,7 +107,7 @@ export default function UploadSection({ onFileSelect, onProcess, selectedFile, i
 
       {/* Área de Upload */}
       <div
-        onClick={() => !selectedFile && fileInputRef.current?.click()}
+        onClick={() => selectedFiles.length === 0 && fileInputRef.current?.click()}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
@@ -103,23 +116,24 @@ export default function UploadSection({ onFileSelect, onProcess, selectedFile, i
           transition-all duration-300 ease-out
           ${isDragging 
             ? 'border-blue-500 bg-blue-50 scale-[1.02]' 
-            : selectedFile 
+            : selectedFiles.length
               ? 'border-green-300 bg-green-50/50' 
               : 'border-gray-200 bg-gray-50/50 hover:border-blue-300 hover:bg-blue-50/30'
           }
-          ${!selectedFile ? 'cursor-pointer' : ''}
+          ${selectedFiles.length === 0 ? 'cursor-pointer' : ''}
         `}
       >
         <input
           ref={fileInputRef}
           type="file"
           accept=".pdf,application/pdf"
+          multiple
           onChange={handleFileChange}
           className="hidden"
         />
 
         <AnimatePresence mode="wait">
-          {!selectedFile ? (
+          {selectedFiles.length === 0 ? (
             <motion.div
               key="upload-prompt"
               initial={{ opacity: 0 }}
@@ -155,32 +169,57 @@ export default function UploadSection({ onFileSelect, onProcess, selectedFile, i
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="flex items-center justify-between"
+              className="w-full"
             >
-              <div className="flex items-center gap-4">
-                <div className="w-14 h-14 bg-red-100 rounded-xl flex items-center justify-center">
-                  <FileText className="w-7 h-7 text-red-600" />
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-14 h-14 bg-red-100 rounded-xl flex items-center justify-center">
+                    <FileText className="w-7 h-7 text-red-600" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-gray-900">
+                      {selectedFiles.length} arquivo{selectedFiles.length !== 1 ? 's' : ''} selecionado{selectedFiles.length !== 1 ? 's' : ''}
+                    </p>
+                    <p className="text-sm text-gray-500">
+                      Você pode enviar o convênio completo (múltiplos PDFs)
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <p className="font-medium text-gray-900 truncate max-w-xs">
-                    {selectedFile.name}
-                  </p>
-                  <p className="text-sm text-gray-500">
-                    {formatFileSize(selectedFile.size)}
-                  </p>
-                </div>
+
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleRemoveFile();
+                  }}
+                  className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                  title="Remover todos"
+                >
+                  <X className="w-5 h-5 text-gray-400" />
+                </button>
               </div>
-              
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleRemoveFile();
-                }}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                title="Remover arquivo"
-              >
-                <X className="w-5 h-5 text-gray-400" />
-              </button>
+
+              <div className="space-y-2 max-h-52 overflow-auto pr-1">
+                {selectedFiles.map((f, idx) => (
+                  <div key={idx} className="flex items-center justify-between bg-white/70 border border-gray-200 rounded-xl px-3 py-2">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-gray-900 truncate">
+                        {f.name}
+                      </p>
+                      <p className="text-xs text-gray-500">{formatFileSize(f.size)}</p>
+                    </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleRemoveOne(idx);
+                      }}
+                      className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                      title="Remover este arquivo"
+                    >
+                      <X className="w-4 h-4 text-gray-400" />
+                    </button>
+                  </div>
+                ))}
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
@@ -204,13 +243,13 @@ export default function UploadSection({ onFileSelect, onProcess, selectedFile, i
       {/* Botão Processar */}
       <motion.button
         onClick={onProcess}
-        disabled={!selectedFile || isProcessing}
-        whileHover={{ scale: selectedFile && !isProcessing ? 1.02 : 1 }}
-        whileTap={{ scale: selectedFile && !isProcessing ? 0.98 : 1 }}
+        disabled={selectedFiles.length === 0 || isProcessing}
+        whileHover={{ scale: selectedFiles.length && !isProcessing ? 1.02 : 1 }}
+        whileTap={{ scale: selectedFiles.length && !isProcessing ? 0.98 : 1 }}
         className={`
           w-full mt-8 py-4 px-8 rounded-xl font-semibold text-lg
           transition-all duration-300 shadow-lg
-          ${selectedFile && !isProcessing
+          ${selectedFiles.length && !isProcessing
             ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white hover:shadow-blue-200 hover:shadow-xl'
             : 'bg-gray-100 text-gray-400 cursor-not-allowed shadow-none'
           }

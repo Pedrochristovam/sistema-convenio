@@ -25,3 +25,9 @@ tmp/
 # OS
 .DS_Store
 Thumbs.db
+
+# Credenciais e configurações sensíveis
+credentials/
+*.json
+.env
+.env.local

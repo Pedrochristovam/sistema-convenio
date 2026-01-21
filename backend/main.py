@@ -126,13 +126,33 @@ def process_pdf_worker(job_id: str, pdf_path: str) -> Dict:
         logger.info(f"[{job_id}] Worker iniciado")
         
         # Instancia serviços (cada processo tem suas próprias instâncias)
-        from services.ocr_service import OCRService
-        from services.page_filter import PageFilter
-        from services.extractor import DataExtractor
+        from services.safe_convenio_extractor import SafeConvenioExtractor
+        import os
         
-        ocr_service = OCRService(dpi=200, batch_size=10)
-        page_filter = PageFilter()
-        data_extractor = DataExtractor()
+        # Tenta usar Google Vision API (mais preciso) ou fallback para Tesseract
+        ocr_service = None
+        credentials_path = "credentials/google-vision-credentials.json"
+        
+        if os.path.exists(credentials_path) or 'GOOGLE_APPLICATION_CREDENTIALS' in os.environ:
+            try:
+                from services.google_vision_ocr import GoogleVisionOCR
+                ocr_service = GoogleVisionOCR(
+                    credentials_path=credentials_path if os.path.exists(credentials_path) else None,
+                    batch_size=5,
+                    dpi=300
+                )
+                logger.info(f"[{job_id}] ✅ Usando Google Vision API (OCR profissional)")
+            except Exception as e:
+                logger.warning(f"[{job_id}] ⚠️ Google Vision falhou: {e}. Usando Tesseract...")
+                ocr_service = None
+        
+        # Fallback para Tesseract
+        if ocr_service is None:
+            from services.ocr_service import OCRService
+            ocr_service = OCRService(dpi=400, batch_size=5)
+            logger.info(f"[{job_id}] ℹ️ Usando Tesseract OCR (pode ter baixa precisão)")
+        
+        convenio_extractor = SafeConvenioExtractor()  # Extrator SEGURO baseado em rótulos
         
         # Processa em batches
         logger.info(f"[{job_id}] Processando PDF em batches...")
@@ -144,35 +164,37 @@ def process_pdf_worker(job_id: str, pdf_path: str) -> Dict:
         
         total_pages = len(all_ocr_results)
         
-        # Filtra páginas relevantes
-        relevant_pages = page_filter.filter_pages(all_ocr_results)
-        relevant_pages_count = len(relevant_pages)
-        
-        if relevant_pages_count == 0:
+        if total_pages == 0:
             return {
                 "status": "error",
-                "error": "Nenhuma página relevante encontrada"
+                "error": "Nenhuma página encontrada no PDF"
             }
         
-        # Extrai dados
-        texts = [page["text"] for page in relevant_pages]
-        extracted_data = data_extractor.extract_multiple_records(texts)
+        # Extrai dados de convênio
+        logger.info(f"[{job_id}] Extraindo dados de convênio...")
         
-        if not extracted_data:
+        convenio_data = convenio_extractor.extract_convenio_data_from_pages(
+            ocr_results=all_ocr_results,
+            documento_id=job_id
+        )
+        
+        movimentacoes = convenio_data.get("movimentacoes", [])
+        
+        if not movimentacoes:
             return {
                 "status": "error",
-                "error": "Nenhum dado bancário encontrado"
+                "error": "Nenhuma movimentação encontrada no documento"
             }
         
-        logger.info(f"[{job_id}] Concluído: {len(extracted_data)} registros")
+        logger.info(f"[{job_id}] Concluído: {len(movimentacoes)} movimentações extraídas")
         
         return {
             "status": "done",
             "id": job_id,
             "total_pages": total_pages,
-            "relevant_pages": relevant_pages_count,
-            "records_found": len(extracted_data),
-            "items": extracted_data
+            "relevant_pages": total_pages,
+            "records_found": len(movimentacoes),
+            "items": [convenio_data]  # Retorna como lista com 1 item (convenio_data completo)
         }
         
     except Exception as e:

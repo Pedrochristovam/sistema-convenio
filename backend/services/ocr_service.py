@@ -23,17 +23,21 @@ logger = logging.getLogger(__name__)
 class OCRService:
     """Serviço responsável por OCR de documentos PDF"""
     
-    def __init__(self, dpi: int = 200, batch_size: int = 10):
+    def __init__(self, dpi: int = 400, batch_size: int = 10):
         """
         Inicializa o serviço de OCR
         
         Args:
-            dpi: Resolução (200 usa menos RAM que 300)
+            dpi: Resolução (400 para documentos escaneados de baixa qualidade)
             batch_size: Páginas por batch (padrão: 10)
         """
-        self.tesseract_config = '--oem 3 --psm 6 -l por'
+        # Config otimizada para TABELAS e COLUNAS (PSM 4)
+        # REMOVIDO whitelist que estava impedindo leitura correta
+        self.tesseract_config = '--oem 3 --psm 4 -l por'
         self.dpi = dpi
         self.batch_size = batch_size
+        
+        logger.info(f"OCR iniciado: DPI={dpi}, PSM=4 (detecção de colunas)")
     
     def get_page_count(self, pdf_path: str) -> int:
         """
@@ -89,6 +93,7 @@ class OCRService:
     def preprocess_image(self, image: Image.Image) -> np.ndarray:
         """
         Pré-processa imagem para melhorar qualidade do OCR
+        OTIMIZADO para documentos escaneados de BAIXA QUALIDADE
         
         Args:
             image: Imagem PIL
@@ -105,29 +110,43 @@ class OCRService:
         else:
             gray = img_array
         
-        # Aumenta contraste usando CLAHE (Contrast Limited Adaptive Histogram Equalization)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        enhanced = clahe.apply(gray)
+        # PASSO 1: Redimensiona para AUMENTAR resolução (1.5x ao invés de 2x)
+        # Balanço entre qualidade e velocidade
+        height, width = gray.shape
+        gray = cv2.resize(gray, (int(width * 1.5), int(height * 1.5)), interpolation=cv2.INTER_CUBIC)
         
-        # Aplica desfoque gaussiano para reduzir ruído
-        denoised = cv2.GaussianBlur(enhanced, (3, 3), 0)
+        # PASSO 2: Denoise RÁPIDO (Gaussian Blur ao invés de fastNlMeans)
+        denoised = cv2.GaussianBlur(gray, (3, 3), 0)
         
-        # Aplica threshold adaptativo para binarização
-        # Melhora a separação entre texto e fundo
+        # PASSO 3: Aumenta contraste FORTE
+        clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(denoised)
+        
+        # PASSO 4: Sharpen para realçar bordas dos caracteres
+        kernel_sharpen = np.array([[-1,-1,-1],
+                                   [-1, 9,-1],
+                                   [-1,-1,-1]])
+        sharpened = cv2.filter2D(enhanced, -1, kernel_sharpen)
+        
+        # PASSO 5: Binarização ADAPTATIVA (melhor que Otsu para documentos não uniformes)
         binary = cv2.adaptiveThreshold(
-            denoised,
-            255,
-            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY,
-            11,
-            2
+            sharpened, 
+            255, 
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+            cv2.THRESH_BINARY, 
+            15,  # Block size (aumentado para documentos escaneados)
+            3    # C constant
         )
         
-        # Aplica morfologia para remover ruídos pequenos
-        kernel = np.ones((2, 2), np.uint8)
+        # PASSO 6: Morfologia para limpar ruído pequeno
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
         cleaned = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
         
-        return cleaned
+        # PASSO 7: Dilata LEVEMENTE para conectar caracteres quebrados
+        kernel_dilate = np.ones((2, 2), np.uint8)
+        final = cv2.dilate(cleaned, kernel_dilate, iterations=1)
+        
+        return final
     
     def extract_text_from_image(self, processed_image: np.ndarray) -> str:
         """

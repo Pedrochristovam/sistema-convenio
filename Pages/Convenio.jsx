@@ -3,9 +3,12 @@ import { motion, AnimatePresence } from 'framer-motion';
 import UploadSection from '../components/convenio/UploadSection.jsx';
 import ProcessingSection from '../components/convenio/ProcessingSection.jsx';
 import ResultSection from '../components/convenio/ResultSection.jsx';
+import ConvenioResultSection from '../components/convenio/ConvenioResultSection.jsx';
 
-// Configuração da API (ajustar conforme ambiente)
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+// Configuração da API
+// Importante: para evitar desencontro de portas durante os testes locais,
+// fixamos o backend em 8000 (o backend também está fixo em 8000).
+const API_BASE_URL = 'http://localhost:8000';
 
 /**
  * Página principal de Processamento de Convênio
@@ -14,12 +17,14 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 export default function Convenio() {
   // Estados da aplicação
   const [currentStep, setCurrentStep] = useState('upload'); // 'upload' | 'processing' | 'result'
-  const [selectedFile, setSelectedFile] = useState(null);
+  const [selectedFile, setSelectedFile] = useState(null); // File | File[] | null
   const [processId, setProcessId] = useState(null);
   const [progress, setProgress] = useState(0);
   const [resultData, setResultData] = useState(null);
   const [error, setError] = useState(null);
   const [isExporting, setIsExporting] = useState(false);
+
+  const selectedFiles = Array.isArray(selectedFile) ? selectedFile : (selectedFile ? [selectedFile] : []);
 
   /**
    * Inicia o upload e processamento do arquivo
@@ -34,10 +39,20 @@ export default function Convenio() {
     try {
       // Prepara FormData para upload
       const formData = new FormData();
-      formData.append('file', selectedFile);
+      const files = Array.isArray(selectedFile) ? selectedFile : [selectedFile];
 
-      // POST /upload - Envia arquivo
-      const uploadResponse = await fetch(`${API_BASE_URL}/upload`, {
+      // Monta payload conforme endpoint
+      if (files.length > 1) {
+        files.forEach((fileItem) => {
+          formData.append('files', fileItem, fileItem.name);
+        });
+      } else {
+        formData.append('file', files[0], files[0].name);
+      }
+
+      // POST /upload (1 arquivo) | /upload_batch (múltiplos)
+      const uploadEndpoint = files.length > 1 ? `${API_BASE_URL}/upload_batch` : `${API_BASE_URL}/upload`;
+      const uploadResponse = await fetch(uploadEndpoint, {
         method: 'POST',
         body: formData,
       });
@@ -47,16 +62,71 @@ export default function Convenio() {
       }
 
       const uploadData = await uploadResponse.json();
-      const id = uploadData.id;
-      setProcessId(id);
+      const jobId = uploadData.job_id;
+      setProcessId(jobId);
 
-      // Simula progresso e mostra resultado direto
-      setProgress(100);
-      setResultData(uploadData.items || []);
+      // Polling do resultado (espera processamento)
+      let attempts = 0;
+      const maxAttempts = 300; // 5 minutos (para PDFs grandes)
       
-      setTimeout(() => {
-        setCurrentStep('result');
-      }, 500);
+      const checkStatus = async () => {
+        try {
+          // PASSO 1: Verifica STATUS do job
+          const statusResponse = await fetch(`${API_BASE_URL}/status/${jobId}`);
+          
+          if (!statusResponse.ok) {
+            throw new Error(`Erro ao verificar status: ${statusResponse.status}`);
+          }
+          
+          const statusData = await statusResponse.json();
+          console.log('📊 Status do job:', statusData);
+          
+          if (statusData.status === 'done') {
+            // PASSO 2: Busca RESULTADO completo
+            console.log('✅ Processamento concluído! Buscando resultado...');
+            setProgress(95);
+            
+            const resultResponse = await fetch(`${API_BASE_URL}/result/${jobId}`);
+            if (!resultResponse.ok) {
+              throw new Error(`Erro ao buscar resultado: ${resultResponse.status}`);
+            }
+            
+            const resultData = await resultResponse.json();
+            console.log('📦 Resultado recebido:', resultData);
+            
+            setProgress(100);
+            setResultData(resultData.items || []);
+            setCurrentStep('result');
+            
+          } else if (statusData.status === 'error') {
+            throw new Error(statusData.message || 'Erro no processamento');
+            
+          } else if (statusData.status === 'processing' || statusData.status === 'pending') {
+            // Ainda processando
+            attempts++;
+            if (attempts < maxAttempts) {
+              // Usa o progresso REAL da API (0-100) ou simula
+              const apiProgress = statusData.progress || 0;
+              const simulatedProgress = 10 + Math.min(85, (attempts / maxAttempts) * 85);
+              const finalProgress = Math.max(apiProgress, simulatedProgress);
+              
+              console.log(`⏳ Processando... ${finalProgress.toFixed(0)}% (tentativa ${attempts}/${maxAttempts})`);
+              setProgress(finalProgress);
+              
+              setTimeout(checkStatus, 3000); // Verifica a cada 3 segundos (PDF grande)
+            } else {
+              throw new Error('Timeout: processamento demorou muito (5 min). Documento muito grande?');
+            }
+          }
+        } catch (err) {
+          console.error('❌ Erro ao verificar status:', err);
+          setError(err.message || 'Erro ao processar arquivo');
+          setCurrentStep('upload');
+        }
+      };
+      
+      // Inicia polling
+      setTimeout(checkStatus, 2000);
 
     } catch (err) {
       console.error('Erro no upload:', err);
@@ -189,7 +259,11 @@ export default function Convenio() {
               exit={{ opacity: 0, x: 20 }}
             >
               <ProcessingSection
-                fileName={selectedFile?.name}
+                fileName={
+                  selectedFiles.length > 1
+                    ? `${selectedFiles.length} arquivos selecionados`
+                    : (selectedFiles[0]?.name || '')
+                }
                 progress={progress}
               />
             </motion.div>
@@ -202,12 +276,21 @@ export default function Convenio() {
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 20 }}
             >
-              <ResultSection
-                data={resultData}
-                onExport={handleExport}
-                onNewUpload={handleNewUpload}
-                isExporting={isExporting}
-              />
+              {resultData && resultData.length > 0 && (resultData[0].tipo_documento === 'EXTRATO_CONVENIO_MOVIMENTACAO' || resultData[0].movimentacoes) ? (
+                <ConvenioResultSection
+                  data={resultData}
+                  onExport={handleExport}
+                  onNewUpload={handleNewUpload}
+                  isExporting={isExporting}
+                />
+              ) : (
+                <ResultSection
+                  data={resultData}
+                  onExport={handleExport}
+                  onNewUpload={handleNewUpload}
+                  isExporting={isExporting}
+                />
+              )}
             </motion.div>
           )}
         </AnimatePresence>
